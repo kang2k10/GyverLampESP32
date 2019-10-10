@@ -1,20 +1,26 @@
 #pragma once
 /*
- * 11.07.2019
- * Класс, который отслеживает действия пользователя по запросу обновления прошивки по воздуху и выполняет эту прошивку.
- * Запрос на обновление - это вызов метода RequestOtaUpdate(), его нужно поместить, например, в обработчик нажатия кнопки, приёма UDP пакета и т.д.
- * Для обновления пользователь должен ДВАЖДЫ запросить обновление в течение заданного промежутка времени (CONFIRMATION_TIMEOUT) во избежание случайного перехода в режим обновления.
- * Режим обновления - это прослушивание специального порта (ESP_OTA_PORT) в ожидании команды обновления прошивки по воздуху (по сети).
- * Режим обновления работает параллельно с основным режимом функционирования, только при ESP_MODE == 1 (WiFi клиент), т.к. требует доступа к ESP по локальной сети и при подключенной кнопке (в данном сетапе, т.к. он вызывается кнопкой).
- * Режим обновления активен в течение заданного промежутка времени (ESP_CONF_TIMEOUT). Потом ESP автоматически перезагружается.
- * Обновление производится из Arduino IDE: меню Инструменты - Порт - <Выбрать обнаруженный СЕТЕВОЙ COM порт из списка> (если он не обнаружен, значит что-то настроено неправильно), затем обычная команда "Загрузка" для прошивки.
- * Для включения опции обновления по воздуху в основном файле должен быть определён идентификатор OTA "#define OTA" и режим "#define ESP_MODE (1U)" (а также в данном проекте должна быть подключена кнопка).
+   11.07.2019
+   Класс, который отслеживает действия пользователя по запросу обновления прошивки по воздуху и выполняет эту прошивку.
+   Запрос на обновление - это вызов метода RequestOtaUpdate(), его нужно поместить, например, в обработчик нажатия кнопки, приёма UDP пакета и т.д.
+   Для обновления пользователь должен ДВАЖДЫ запросить обновление в течение заданного промежутка времени (CONFIRMATION_TIMEOUT) во избежание случайного перехода в режим обновления.
+   Режим обновления - это прослушивание специального порта (ESP_OTA_PORT) в ожидании команды обновления прошивки по воздуху (по сети).
+   Режим обновления работает параллельно с основным режимом функционирования, только при ESP_MODE == 1 (WiFi клиент), т.к. требует доступа к ESP по локальной сети и при подключенной кнопке (в данном сетапе, т.к. он вызывается кнопкой).
+   Режим обновления активен в течение заданного промежутка времени (ESP_CONF_TIMEOUT). Потом ESP автоматически перезагружается.
+   Обновление производится из Arduino IDE: меню Инструменты - Порт - <Выбрать обнаруженный СЕТЕВОЙ COM порт из списка> (если он не обнаружен, значит что-то настроено неправильно), затем обычная команда "Загрузка" для прошивки.
+   Для включения опции обновления по воздуху в основном файле должен быть определён идентификатор OTA "#define OTA" и режим "#define ESP_MODE (1U)" (а также в данном проекте должна быть подключена кнопка).
 */
 
 #ifdef OTA
 
 #include <ArduinoOTA.h>
+#if defined(ESP8266)
 #include <ESP8266mDNS.h>
+#endif
+
+#if defined(ESP32)
+#include <ESPmDNS.h>
+#endif
 
 #define CONFIRMATION_TIMEOUT  (30U)                         // время в сеундах, в течение которого нужно дважды подтвердить старт обновлениЯ по воздуху (иначе сброс в None)
 
@@ -37,9 +43,9 @@ class OtaManager
     {
       if (ESP_MODE != 1)
       {
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.print(F("Запрос обновления по воздуху поддерживается только в режиме ESP_MODE = 1\n"));
-        #endif
+#endif
 
         return false;
       }
@@ -49,9 +55,9 @@ class OtaManager
         OtaFlag = OtaPhase::GotFirstConfirm;
         momentOfFirstConfirmation = millis();
 
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.print(F("Получено первое подтверждение обновления по воздуху\nОжидание второго подтверждения\n"));
-        #endif
+#endif
 
         return false;
       }
@@ -60,9 +66,9 @@ class OtaManager
       {
         OtaFlag = OtaPhase::GotSecondConfirm;
 
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.print(F("Получено второе подтверждение обновления по воздуху\nСтарт режима обновления\n"));
-        #endif
+#endif
 
         startOtaUpdate();
         return true;
@@ -79,9 +85,9 @@ class OtaManager
         OtaFlag = OtaPhase::None;
         momentOfFirstConfirmation = 0;
 
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.print(F("Таймаут ожидания второго подтверждения превышен\nСброс флага в исходное состояние\n"));
-        #endif
+#endif
 
         return;
       }
@@ -92,16 +98,16 @@ class OtaManager
         OtaFlag = OtaPhase::None;
         momentOfOtaStart = 0;
 
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.print(F("Таймаут ожидания прошивки по воздуху превышен\nСброс флага в исходное состояние\nПерезагрузка\n"));
         delay(500);
-        #endif
+#endif
 
-        #if defined(ESP8266)
+#if defined(ESP8266)
         ESP.reset();
-        #else
+#else
         ESP.restart();
-        #endif
+#endif
 
         return;
       }
@@ -119,7 +125,21 @@ class OtaManager
     void startOtaUpdate()
     {
       char espHostName[65];
+#if defined(ESP8266)
       sprintf(espHostName, "%s-%u", AP_NAME, ESP.getChipId());
+#endif
+#if defined(ESP32)
+      char ChipID1[15];
+      char ChipID2[15];
+      char ChipID[23];
+      uint64_t chipid = ESP.getEfuseMac(); // The chip ID is essentially its MAC address(length: 6 bytes).
+      uint16_t chip = (uint16_t)(chipid >> 32);
+      snprintf(ChipID1, 15, "%04X", chip);
+      snprintf(ChipID2, 15, "%08X", (uint32_t)chipid);
+      snprintf(ChipID, 23, "%04X%08X", chip, (uint32_t)chipid);
+      sprintf(espHostName, "%s-%u", AP_NAME, ChipID);
+#endif
+
       ArduinoOTA.setPort(ESP_OTA_PORT);
       ArduinoOTA.setHostname(espHostName);
       ArduinoOTA.setPassword(AP_PASS);
@@ -138,70 +158,70 @@ class OtaManager
 
         // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
 
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.printf_P(PSTR("Start updating %s\n"), type.c_str());
-        #endif
+#endif
       });
 
       ArduinoOTA.onEnd([this]()
       {
         OtaFlag = OtaPhase::Done;
 
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.print(F("Обновление по воздуху выполнено\nПерезапуск"));
         delay(500);
-        #endif
+#endif
       });
 
       ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
       {
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.printf_P(PSTR("Ход выполнения: %u%%\r"), (progress / (total / 100)));
-        #endif
+#endif
       });
 
       ArduinoOTA.onError([this](ota_error_t error)
       {
         OtaFlag = OtaPhase::None;
 
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.printf_P(PSTR("Обновление по воздуху завершилось ошибкой [%u]: "), error);
-        #endif
+#endif
 
         if (error == OTA_AUTH_ERROR)
         {
-          #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
           LOG.println(F("Auth Failed"));
-          #endif
+#endif
         }
         else if (error == OTA_BEGIN_ERROR)
         {
-          #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
           LOG.println(F("Begin Failed"));
-          #endif
+#endif
         }
         else if (error == OTA_CONNECT_ERROR)
         {
-          #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
           LOG.println(F("Connect Failed"));
-          #endif
+#endif
         }
         else if (error == OTA_RECEIVE_ERROR)
         {
-          #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
           LOG.println(F("Receive Failed"));
-          #endif
+#endif
         }
         else if (error == OTA_END_ERROR)
         {
-          #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
           LOG.println(F("End Failed"));
-          #endif
+#endif
         }
 
-        #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
         LOG.print(F("Сброс флага в исходное состояние\nПереход в режим ожидания запроса прошивки по воздуху\n"));
-        #endif
+#endif
       });
 
       ArduinoOTA.setRebootOnSuccess(true);
@@ -210,13 +230,13 @@ class OtaManager
       momentOfFirstConfirmation = 0;
       momentOfOtaStart = 0;
 
-      #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
       LOG.printf_P(PSTR("Для обновления в Arduino IDE выберите пункт меню Инструменты - Порт - '%s at "), espHostName);
       LOG.print(WiFi.localIP());
       LOG.println(F("'"));
       LOG.printf_P(PSTR("Затем нажмите кнопку 'Загрузка' в течение %u секунд и по запросу введите пароль '%s'\n"), ESP_CONF_TIMEOUT, AP_PASS);
       LOG.println(F("Устройство с Arduino IDE должно быть в одной локальной сети с модулем ESP!"));
-      #endif
+#endif
     }
 };
 

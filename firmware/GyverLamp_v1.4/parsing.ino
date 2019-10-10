@@ -8,10 +8,10 @@ void parseUDP()
     packetBuffer[n] = '\0';
     strcpy(inputBuffer, packetBuffer);
 
-    #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
     LOG.print(F("Inbound UDP packet: "));
     LOG.println(inputBuffer);
-    #endif
+#endif
 
     if (Udp.remoteIP() == WiFi.localIP())                   // не реагировать на свои же пакеты
     {
@@ -21,282 +21,287 @@ void parseUDP()
     char reply[MAX_UDP_BUFFER_SIZE];
     processInputBuffer(inputBuffer, reply, true);
 
-    #if (USE_MQTT && ESP_MODE == 1)                         // отправка ответа выполнения команд по MQTT, если разрешено
+#if (USE_MQTT && ESP_MODE == 1)                         // отправка ответа выполнения команд по MQTT, если разрешено
     strcpy(MqttManager::mqttBuffer, reply);                 // разрешение определяется при выполнении каждой команды отдельно, команды GET, DEB, DISCOVER и OTA, пришедшие по UDP, игнорируются (приходят раз в 2 секунды от приложения)
-    #endif
-    
+#endif
+
     Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
+#if defined(ESP8266)
     Udp.write(reply);
+#endif
+#if defined(ESP32)
+    Udp.print(reply);
+#endif
     Udp.endPacket();
 
-    #ifdef GENERAL_DEBUG
+#ifdef GENERAL_DEBUG
     LOG.print(F("Outbound UDP packet: "));
     LOG.println(reply);
     LOG.println();
-    #endif
+#endif
   }
 }
 
 
 void processInputBuffer(char *inputBuffer, char *outputBuffer, bool generateOutput)
 {
-    char buff[MAX_UDP_BUFFER_SIZE], *endToken = NULL;
+  char buff[MAX_UDP_BUFFER_SIZE], *endToken = NULL;
 
-    if (!strncmp_P(inputBuffer, PSTR("DEB"), 3))
+  if (!strncmp_P(inputBuffer, PSTR("DEB"), 3))
+  {
+#ifdef USE_NTP
+    sprintf_P(inputBuffer, PSTR("%s%s"), PSTR("OK "), timeClient.getFormattedTime().c_str());
+#else
+    strcpy_P(inputBuffer, PSTR("OK --:--"));
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("GET"), 3))
+  {
+    sendCurrent(inputBuffer);
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("EFF"), 3))
+  {
+    EepromManager::SaveModesSettings(&currentMode, modes);
+    memcpy(buff, &inputBuffer[3], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 4
+    currentMode = (uint8_t)atoi(buff);
+    loadingFlag = true;
+    FastLED.clear();
+    delay(1);
+    sendCurrent(inputBuffer);
+    FastLED.setBrightness(modes[currentMode].Brightness);
+
+#if (USE_MQTT && ESP_MODE == 1)
+    MqttManager::needToPublish = true;
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("BRI"), 3))
+  {
+    memcpy(buff, &inputBuffer[3], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 4
+    modes[currentMode].Brightness = constrain(atoi(buff), 1, 255);
+    FastLED.setBrightness(modes[currentMode].Brightness);
+    loadingFlag = true;
+    settChanged = true;
+    eepromTimeout = millis();
+    sendCurrent(inputBuffer);
+
+#if (USE_MQTT && ESP_MODE == 1)
+    MqttManager::needToPublish = true;
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("SPD"), 3))
+  {
+    memcpy(buff, &inputBuffer[3], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 4
+    modes[currentMode].Speed = atoi(buff);
+    loadingFlag = true;
+    settChanged = true;
+    eepromTimeout = millis();
+    sendCurrent(inputBuffer);
+
+#if (USE_MQTT && ESP_MODE == 1)
+    MqttManager::needToPublish = true;
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("SCA"), 3))
+  {
+    memcpy(buff, &inputBuffer[3], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 4
+    modes[currentMode].Scale = atoi(buff);
+    loadingFlag = true;
+    settChanged = true;
+    eepromTimeout = millis();
+    sendCurrent(inputBuffer);
+
+#if (USE_MQTT && ESP_MODE == 1)
+    MqttManager::needToPublish = true;
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("P_ON"), 4))
+  {
+    ONflag = true;
+    loadingFlag = true;
+    settChanged = true;
+    eepromTimeout = millis();
+    changePower();
+    sendCurrent(inputBuffer);
+
+#if (USE_MQTT && ESP_MODE == 1)
+    MqttManager::needToPublish = true;
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("P_OFF"), 5))
+  {
+    ONflag = false;
+    settChanged = true;
+    eepromTimeout = millis();
+    changePower();
+    sendCurrent(inputBuffer);
+
+#if (USE_MQTT && ESP_MODE == 1)
+    MqttManager::needToPublish = true;
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("ALM_SET"), 7))
+  {
+    uint8_t alarmNum = (char)inputBuffer[7] - '0';
+    alarmNum -= 1;
+    if (strstr_P(inputBuffer, PSTR("ON")) - inputBuffer == 9)
     {
-        #ifdef USE_NTP
-        sprintf_P(inputBuffer, PSTR("%s%s"), PSTR("OK "), timeClient.getFormattedTime().c_str());
-        #else
-        strcpy_P(inputBuffer, PSTR("OK --:--"));
-        #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("GET"), 3))
-    {
-      sendCurrent(inputBuffer);
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("EFF"), 3))
-    {
-      EepromManager::SaveModesSettings(&currentMode, modes);
-      memcpy(buff, &inputBuffer[3], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 4
-      currentMode = (uint8_t)atoi(buff);
-      loadingFlag = true;
-      FastLED.clear();
-      delay(1);
-      sendCurrent(inputBuffer);
-      FastLED.setBrightness(modes[currentMode].Brightness);
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      MqttManager::needToPublish = true;
-      #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("BRI"), 3))
-    {
-      memcpy(buff, &inputBuffer[3], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 4
-      modes[currentMode].Brightness = constrain(atoi(buff), 1, 255);
-      FastLED.setBrightness(modes[currentMode].Brightness);
-      loadingFlag = true;
-      settChanged = true;
-      eepromTimeout = millis();
-      sendCurrent(inputBuffer);
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      MqttManager::needToPublish = true;
-      #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("SPD"), 3))
-    {
-      memcpy(buff, &inputBuffer[3], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 4
-      modes[currentMode].Speed = atoi(buff);
-      loadingFlag = true;
-      settChanged = true;
-      eepromTimeout = millis();
-      sendCurrent(inputBuffer);
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      MqttManager::needToPublish = true;
-      #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("SCA"), 3))
-    {
-      memcpy(buff, &inputBuffer[3], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 4
-      modes[currentMode].Scale = atoi(buff);
-      loadingFlag = true;
-      settChanged = true;
-      eepromTimeout = millis();
-      sendCurrent(inputBuffer);
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      MqttManager::needToPublish = true;
-      #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("P_ON"), 4))
-    {
-      ONflag = true;
-      loadingFlag = true;
-      settChanged = true;
-      eepromTimeout = millis();
-      changePower();
-      sendCurrent(inputBuffer);
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      MqttManager::needToPublish = true;
-      #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("P_OFF"), 5))
-    {
-      ONflag = false;
-      settChanged = true;
-      eepromTimeout = millis();
-      changePower();
-      sendCurrent(inputBuffer);
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      MqttManager::needToPublish = true;
-      #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("ALM_SET"), 7))
-    {
-      uint8_t alarmNum = (char)inputBuffer[7] - '0';
-      alarmNum -= 1;
-      if (strstr_P(inputBuffer, PSTR("ON")) - inputBuffer == 9)
-      {
-        alarms[alarmNum].State = true;
-        sendAlarms(inputBuffer);
-      }
-      else if (strstr_P(inputBuffer, PSTR("OFF")) - inputBuffer == 9)
-      {
-        alarms[alarmNum].State = false;
-        sendAlarms(inputBuffer);
-      }
-      else
-      {
-        memcpy(buff, &inputBuffer[8], strlen(inputBuffer)); // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 9
-        alarms[alarmNum].Time = atoi(buff);
-        uint8_t hour = floor(alarms[alarmNum].Time / 60);
-        uint8_t minute = alarms[alarmNum].Time - hour * 60;
-        sendAlarms(inputBuffer);
-      }
-      EepromManager::SaveAlarmsSettings(&alarmNum, alarms);
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      strcpy(MqttManager::mqttBuffer, inputBuffer);
-      MqttManager::needToPublish = true;
-      #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("ALM_GET"), 7))
-    {
+      alarms[alarmNum].State = true;
       sendAlarms(inputBuffer);
     }
-
-    else if (!strncmp_P(inputBuffer, PSTR("DAWN"), 4))
+    else if (strstr_P(inputBuffer, PSTR("OFF")) - inputBuffer == 9)
     {
-      memcpy(buff, &inputBuffer[4], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 5
-      dawnMode = atoi(buff) - 1;
-      EepromManager::SaveDawnMode(&dawnMode);
+      alarms[alarmNum].State = false;
       sendAlarms(inputBuffer);
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      MqttManager::needToPublish = true;
-      #endif
     }
-
-    else if (!strncmp_P(inputBuffer, PSTR("DISCOVER"), 8))  // обнаружение приложением модуля esp в локальной сети
-    {
-      if (ESP_MODE == 1)                                    // работает только в режиме WiFi клиента
-      {
-        sprintf_P(inputBuffer, PSTR("IP %u.%u.%u.%u:%u"),
-          WiFi.localIP()[0],
-          WiFi.localIP()[1],
-          WiFi.localIP()[2],
-          WiFi.localIP()[3],
-          ESP_UDP_PORT);
-      }
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("TMR_GET"), 7))
-    {
-      sendTimer(inputBuffer);
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("TMR_SET"), 7))
-    {
-      memcpy(buff, &inputBuffer[8], 2);                     // взять подстроку, состоящую из 9 и 10 символов, из строки inputBuffer
-      TimerManager::TimerRunning = (bool)atoi(buff);
-
-      memcpy(buff, &inputBuffer[10], 2);                    // взять подстроку, состоящую из 11 и 12 символов, из строки inputBuffer
-      TimerManager::TimerOption = (uint8_t)atoi(buff);
-
-      memcpy(buff, &inputBuffer[12], strlen(inputBuffer));  // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 13
-      TimerManager::TimeToFire = millis() + strtoull(buff, &endToken, 10) * 1000;
-
-      TimerManager::TimerHasFired = false;
-      sendTimer(inputBuffer);
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      MqttManager::needToPublish = true;
-      #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("FAV_GET"), 7))
-    {
-      FavoritesManager::SetStatus(inputBuffer);
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("FAV_SET"), 7))
-    {
-      FavoritesManager::ConfigureFavorites(inputBuffer);
-      FavoritesManager::SetStatus(inputBuffer);
-      settChanged = true;
-      eepromTimeout = millis();
-
-      #if (USE_MQTT && ESP_MODE == 1)
-      MqttManager::needToPublish = true;
-      #endif
-    }
-
-    else if (!strncmp_P(inputBuffer, PSTR("OTA"), 3))
-    {
-      #ifdef OTA
-      otaManager.RequestOtaUpdate();
-      delay(50);
-      otaManager.RequestOtaUpdate();
-      currentMode = EFF_MATRIX;                             // принудительное включение режима "Матрица" для индикации перехода в режим обновления по воздуху
-      FastLED.clear();
-      delay(1);
-      ONflag = true;
-      changePower();
-      #endif
-    }
-
     else
     {
-      inputBuffer[0] = '\0';
+      memcpy(buff, &inputBuffer[8], strlen(inputBuffer)); // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 9
+      alarms[alarmNum].Time = atoi(buff);
+      uint8_t hour = floor(alarms[alarmNum].Time / 60);
+      uint8_t minute = alarms[alarmNum].Time - hour * 60;
+      sendAlarms(inputBuffer);
     }
+    EepromManager::SaveAlarmsSettings(&alarmNum, alarms);
 
-    if (strlen(inputBuffer) <= 0)
-    {
-      return;
-    }
+#if (USE_MQTT && ESP_MODE == 1)
+    strcpy(MqttManager::mqttBuffer, inputBuffer);
+    MqttManager::needToPublish = true;
+#endif
+  }
 
-    if (generateOutput)                                     // если запрошен вывод ответа выполнения команд, копируем его в исходящий буфер
+  else if (!strncmp_P(inputBuffer, PSTR("ALM_GET"), 7))
+  {
+    sendAlarms(inputBuffer);
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("DAWN"), 4))
+  {
+    memcpy(buff, &inputBuffer[4], strlen(inputBuffer));   // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 5
+    dawnMode = atoi(buff) - 1;
+    EepromManager::SaveDawnMode(&dawnMode);
+    sendAlarms(inputBuffer);
+
+#if (USE_MQTT && ESP_MODE == 1)
+    MqttManager::needToPublish = true;
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("DISCOVER"), 8))  // обнаружение приложением модуля esp в локальной сети
+  {
+    if (ESP_MODE == 1)                                    // работает только в режиме WiFi клиента
     {
-      strcpy(outputBuffer, inputBuffer);
+      sprintf_P(inputBuffer, PSTR("IP %u.%u.%u.%u:%u"),
+                WiFi.localIP()[0],
+                WiFi.localIP()[1],
+                WiFi.localIP()[2],
+                WiFi.localIP()[3],
+                ESP_UDP_PORT);
     }
-    inputBuffer[0] = '\0';                                  // очистка буфера, читобы не он не интерпретировался, как следующий входной пакет
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("TMR_GET"), 7))
+  {
+    sendTimer(inputBuffer);
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("TMR_SET"), 7))
+  {
+    memcpy(buff, &inputBuffer[8], 2);                     // взять подстроку, состоящую из 9 и 10 символов, из строки inputBuffer
+    TimerManager::TimerRunning = (bool)atoi(buff);
+
+    memcpy(buff, &inputBuffer[10], 2);                    // взять подстроку, состоящую из 11 и 12 символов, из строки inputBuffer
+    TimerManager::TimerOption = (uint8_t)atoi(buff);
+
+    memcpy(buff, &inputBuffer[12], strlen(inputBuffer));  // взять подстроку, состоящую последних символов строки inputBuffer, начиная с символа 13
+    TimerManager::TimeToFire = millis() + strtoull(buff, &endToken, 10) * 1000;
+
+    TimerManager::TimerHasFired = false;
+    sendTimer(inputBuffer);
+
+#if (USE_MQTT && ESP_MODE == 1)
+    MqttManager::needToPublish = true;
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("FAV_GET"), 7))
+  {
+    FavoritesManager::SetStatus(inputBuffer);
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("FAV_SET"), 7))
+  {
+    FavoritesManager::ConfigureFavorites(inputBuffer);
+    FavoritesManager::SetStatus(inputBuffer);
+    settChanged = true;
+    eepromTimeout = millis();
+
+#if (USE_MQTT && ESP_MODE == 1)
+    MqttManager::needToPublish = true;
+#endif
+  }
+
+  else if (!strncmp_P(inputBuffer, PSTR("OTA"), 3))
+  {
+#ifdef OTA
+    otaManager.RequestOtaUpdate();
+    delay(50);
+    otaManager.RequestOtaUpdate();
+    currentMode = EFF_MATRIX;                             // принудительное включение режима "Матрица" для индикации перехода в режим обновления по воздуху
+    FastLED.clear();
+    delay(1);
+    ONflag = true;
+    changePower();
+#endif
+  }
+
+  else
+  {
+    inputBuffer[0] = '\0';
+  }
+
+  if (strlen(inputBuffer) <= 0)
+  {
+    return;
+  }
+
+  if (generateOutput)                                     // если запрошен вывод ответа выполнения команд, копируем его в исходящий буфер
+  {
+    strcpy(outputBuffer, inputBuffer);
+  }
+  inputBuffer[0] = '\0';                                  // очистка буфера, читобы не он не интерпретировался, как следующий входной пакет
 }
 
 void sendCurrent(char *outputBuffer)
 {
   sprintf_P(outputBuffer, PSTR("CURR %u %u %u %u %u %u"),
-    currentMode,
-    modes[currentMode].Brightness,
-    modes[currentMode].Speed,
-    modes[currentMode].Scale,
-    ONflag,
-    ESP_MODE);
-  
-  #ifdef USE_NTP
+            currentMode,
+            modes[currentMode].Brightness,
+            modes[currentMode].Speed,
+            modes[currentMode].Scale,
+            ONflag,
+            ESP_MODE);
+
+#ifdef USE_NTP
   strcat_P(outputBuffer, PSTR(" 1"));
-  #else
+#else
   strcat_P(outputBuffer, PSTR(" 0"));
-  #endif
+#endif
 
   sprintf_P(outputBuffer, PSTR("%s %u"), outputBuffer, (uint8_t)TimerManager::TimerRunning);
 
-  #ifdef USE_NTP
+#ifdef USE_NTP
   sprintf_P(outputBuffer, PSTR("%s %s"), outputBuffer, timeClient.getFormattedTime().c_str());
-  #else
+#else
   sprintf_P(outputBuffer, PSTR("%s %ull"), outputBuffer, millis());
-  #endif
+#endif
 }
 
 void sendAlarms(char *outputBuffer)
@@ -319,7 +324,7 @@ void sendAlarms(char *outputBuffer)
 void sendTimer(char *outputBuffer)
 {
   sprintf_P(outputBuffer, PSTR("TMR %u %u %u"),
-    TimerManager::TimerRunning,
-    TimerManager::TimerOption,
-   (TimerManager::TimerRunning ? (uint16_t)floor((TimerManager::TimeToFire - millis()) / 1000) : 0));
+            TimerManager::TimerRunning,
+            TimerManager::TimerOption,
+            (TimerManager::TimerRunning ? (uint16_t)floor((TimerManager::TimeToFire - millis()) / 1000) : 0));
 }

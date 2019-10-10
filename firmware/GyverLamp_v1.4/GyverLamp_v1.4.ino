@@ -83,8 +83,20 @@
 #include "pgmspace.h"
 #include "Constants.h"
 #include <FastLED.h>
+#if defined(ESP8266)
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
+#endif
+#if defined(ESP32)
+#include <WiFi.h>
+#include <WebServer.h>
+#ifndef min
+#define min(a,b) (((a) < (b)) ? (a) : (b))
+#endif
+#ifndef max
+#define max(a,b) (((a) > (b)) ? (a) : (b))
+#endif
+#endif
 #include <WiFiManager.h>
 #include <WiFiUdp.h>
 #include <EEPROM.h>
@@ -199,9 +211,10 @@ void setup()
   }
   #endif
 
+#if defined(ESP8266)
   ESP.wdtDisable();
   //ESP.wdtEnable(WDTO_8S);
-
+#endif
 
   // КНОПКА
   #if defined(ESP_USE_BUTTON)
@@ -379,6 +392,8 @@ void loop()
   handleTelnetClient();
   #endif
 
+#if defined(ESP8266)
   ESP.wdtFeed();                                            // пнуть собаку
-  yield();                                                  // обработать все "служебные" задачи: wdt, WiFi подключение и т.д. (?)
+#endif
+yield();                                                  // обработать все "служебные" задачи: wdt, WiFi подключение и т.д. (?)
 }

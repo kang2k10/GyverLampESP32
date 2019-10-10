@@ -98,7 +98,12 @@ void resolveNtpServerAddress(bool &ntpServerAddressResolved)              // Ñ„Ñ
     return;
   }
 
+#if defined(ESP8266)
   WiFi.hostByName(NTP_ADDRESS, ntpServerIp, RESOLVE_TIMEOUT);
+#endif
+#if defined(ESP32)
+  WiFi.hostByName(NTP_ADDRESS, ntpServerIp);
+#endif
   if (ntpServerIp[0] <= 0)
   {
     #ifdef GENERAL_DEBUG
